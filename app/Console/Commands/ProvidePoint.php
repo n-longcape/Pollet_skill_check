@@ -3,18 +3,25 @@
 namespace App\Console\Commands;
 
 use App\Clients\ClientMock;
-use App\Models\ChargeHistory;
 use App\Models\ImportFileHistory;
+use App\Notifications\SlackNotification;
+use App\Services\ProvidePointService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Notifications\Notifiable;
 use League\Csv\Reader;
 use League\Csv\Writer;
 
 class ProvidePoint extends Command
 {
 
+    use Notifiable;
     use DatabaseTransactions;
+    
+    protected $filePath;
+
+    protected $fileName;
 
     /**
      * The name and signature of the console command.
@@ -34,7 +41,7 @@ class ProvidePoint extends Command
 
     const CSV_HEADER_TOTAL_AMOUNT = 'total_amount';
 
-    const CSV_HEADER_POINTS = 'points';
+    const CSV_HEADER_POINTS = 'amount';
 
     const CSV_HEADERS = [self::CSV_HEADER_USER_ID, self::CSV_HEADER_TOTAL_AMOUNT, self::CSV_HEADER_POINTS];
 
@@ -43,7 +50,6 @@ class ProvidePoint extends Command
     /**
      * Create a new command instance.
      *
-     * @return void
      */
     public function __construct()
     {
@@ -53,55 +59,37 @@ class ProvidePoint extends Command
     /**
      * Execute the console command.
      *
+     * @throws \League\Csv\Exception
+     * @throws \TypeError
      * @return void
      */
-    public function handle(ClientMock $client)
+    public function handle()
     {
-        $yearMonth = Carbon::now()->subMonth()->format('Y-m');
-        $filePath = $this->option('filePath') ?: storage_path('app/monthly_point_'. $yearMonth.'.csv');
+        $this->setFilePath();
+        $this->setFileName();
 
-        $fileArray = explode('/', $filePath);
-        $fileName = array_pop($fileArray);
+        $service = new ProvidePointService(new ClientMock());
 
         // 重複ファイルは取り込まない
-        if(ImportFileHistory::where('name', $fileName)->exists()) {
+        if(ImportFileHistory::where('name', $this->fileName)->exists()) {
             echo json_encode(['result' => 'file already imported']);
             return;
         }
 
-        $csv = Reader::createFromPath($filePath, 'r');
+        $csv = Reader::createFromPath($this->filePath, 'r');
         $csv->setHeaderOffset(0);
         $records = $csv->getRecords();
-        $successes = [];
-        $failures = [];
         
-        foreach($records as $record) {
-            try {
-                $result = $client->provide($record[self::CSV_HEADER_USER_ID], $record[self::CSV_HEADER_POINTS]);
-
-                if($result->code !== 200) {
-                    $failures[] = $record;
-                    continue;
-                }
-            } catch (\Exception $exception) {
-                $failures[] = $record;
-                continue;
-            }
-            ChargeHistory::create([
-                'user_id' => $record[self::CSV_HEADER_USER_ID], 
-                'amount' => $record[self::CSV_HEADER_POINTS],
-                'status' => 'completed',
-                ]);
-
-            $successes[] = $record;
-        }
-
-        $successResult  = $this->outputCsv($successes, 'point/success/success_'. $yearMonth. '.csv');
-        $failureResult = $this->outputCsv($failures, 'point/failure/failure'. $yearMonth. '.csv');
+        $provideResult = $service->chargePointByRecords($records);
+        
+        $successResult = $this->outputCsv($provideResult['successes'], 'point/success/success_'.$this->fileName);
+        $failureResult = $this->outputCsv($provideResult['failures'], 'point/failure/failure_'.$this->fileName);
 
         ImportFileHistory::create([
-            'name' => $fileName
+            'name' => $this->fileName
         ]);
+
+        $this->notify(new SlackNotification($this->createContent(count($provideResult['successes']), count($provideResult['failures']))));
 
         echo json_encode(['result' => 'success', 'successCsvOutput' => !empty($successResult), 'failureCsvOutput' => !empty($failureResult)]);
         return;
@@ -123,5 +111,42 @@ class ProvidePoint extends Command
 
         return file_put_contents(storage_path('app/'. $fileName), $csv);
         
+    }
+
+    /**
+     * create Clack Content
+     * @param $successCount
+     * @param $failureCount
+     * @return string
+     */
+    protected function createContent($successCount, $failureCount) {
+        return 
+            $this->fileName.'の取り込みが完了しました。
+            成功件数: '.$successCount.'件
+            失敗件数: '.$failureCount.'件';
+    }
+
+    /**
+     * set filePathProperty
+     */
+    protected function setFilePath() {
+        $this->filePath = $this->option('filePath') ?: storage_path('app/monthly_point_'. Carbon::now()->subMonth()->format('Y-m').'.csv');
+    }
+
+    /**
+     * set fileNameProperty
+     */
+    protected function setFileName() {
+        $fileArray = explode('/', $this->filePath);
+        $this->fileName = array_pop($fileArray);
+    }
+
+    /**
+     * @param $notification
+     * @return mixed
+     */
+    public function routeNotificationForSlack($notification)
+    {
+        return env('SLACK_URL');
     }
 }

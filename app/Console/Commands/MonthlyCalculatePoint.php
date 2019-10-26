@@ -24,7 +24,7 @@ class MonthlyCalculatePoint extends Command
      */
     protected $description = 'Command description';
 
-    const CSV_HEADERS = ['user_id', 'total_amount', 'points'];
+    const CSV_HEADERS = ['user_id', 'total_amount', 'amount'];
     
     const DEFAULT_POINT_PERCENTAGE = 0.05;
 
@@ -60,7 +60,7 @@ class MonthlyCalculatePoint extends Command
         }
 
         $result = $this->outputCsv($records);
-        echo json_encode(['result' => $result]);
+        echo json_encode(['success' => !empty($result)]);
         return;
 
     }
