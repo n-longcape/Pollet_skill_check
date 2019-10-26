@@ -1,0 +1,6 @@
+*
+!public/
+!point
+!point/success
+!point/failure
+!.gitignore
