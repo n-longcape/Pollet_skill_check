@@ -27,8 +27,8 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        // $schedule->command('inspire')
-        //          ->hourly();
+        $schedule->command('command:MonthlyCalculatePoint')->monthlyOn(5, '02:00');
+        $schedule->command('command:ProvidePoint')->monthlyOn(10, '00:00');
     }
 
     /**
